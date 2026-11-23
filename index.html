@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="theme-color" content="#faf6ef" />
+    <title>NutriPanel · Agenda</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600&display=swap"
+      rel="stylesheet"
+    />
+    <!-- v-cloak inline: oculta las llaves {{ }} aunque styles.css no cargue -->
+    <style>
+      [v-cloak] { display: none !important; }
+    </style>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <noscript>
+      <p style="padding:16px;font-family:sans-serif">Este panel necesita JavaScript activado.</p>
+    </noscript>
+    <div
+      id="aviso-carga"
+      hidden
+      style="padding:16px;margin:16px;border:2px solid #b4533f;border-radius:10px;background:#fbeeea;color:#25322a;font-family:sans-serif;line-height:1.4"
+    ></div>
+
+    <div id="app" v-cloak>
+      <header class="topbar">
+        <div class="container topbar__inner">
+          <div>
+            <p class="topbar__brand">NutriPanel</p>
+            <h1 class="topbar__section">Agenda</h1>
+          </div>
+          <button type="button" class="btn-add" @click="abrirFormularioHorario">+ Agregar horario</button>
+        </div>
+      </header>
+
+      <main class="container">
+        <p class="notice" v-if="aviso" role="status">{{ aviso }}</p>
+
+        <!-- Agenda del día -->
+        <section class="dayview" aria-labelledby="dia-titulo">
+          <div class="daynav">
+            <div class="daynav__heading" aria-live="polite">
+              <p class="daynav__tag" :class="{ 'daynav__tag--past': diaEsPasado }">
+                {{ etiquetaRelativa(diaSeleccionado) || (diaEsPasado ? 'Día anterior' : 'Próximamente') }}
+              </p>
+              <h2 class="daynav__title" id="dia-titulo">{{ fechaCompleta(diaSeleccionado) }}</h2>
+            </div>
+
+            <div class="daynav__controls" role="group" aria-label="Cambiar de día">
+              <button type="button" class="navbtn" aria-label="Día anterior" @click="moverDia(-1)">
+                <span aria-hidden="true">‹</span>
+              </button>
+              <button
+                type="button"
+                class="navbtn navbtn--today"
+                :disabled="diaSeleccionado === hoyFecha"
+                @click="irAHoy"
+              >Hoy</button>
+              <button type="button" class="navbtn" aria-label="Día siguiente" @click="moverDia(1)">
+                <span aria-hidden="true">›</span>
+              </button>
+              <button
+                type="button"
+                id="agenda-elegir-fecha"
+                class="navbtn navbtn--calendar"
+                aria-haspopup="dialog"
+                @click="abrirSelectorDia"
+              >
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect x="3.5" y="5" width="17" height="15" rx="3" />
+                  <path d="M3.5 10h17M8 3v4M16 3v4" />
+                </svg>
+                <span>Elegir fecha</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Resumen del día: cada pastilla también filtra la lista -->
+          <div class="summary">
+            <h3 class="summary__title" id="resumen-titulo">Resumen del día</h3>
+            <div class="summary__pills" role="group" aria-labelledby="resumen-titulo">
+              <button
+                v-for="op in opcionesFiltro"
+                :key="op.clave"
+                type="button"
+                class="pill"
+                :class="['pill--' + op.clave, { 'pill--active': filtroEstado === op.clave }]"
+                :aria-pressed="filtroEstado === op.clave"
+                @click="elegirFiltro(op.clave)"
+              >
+                <span class="pill__dot" aria-hidden="true"></span>
+                <span class="pill__label">{{ op.texto }}</span>
+                <span class="pill__count">{{ op.cantidad }}</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Búsqueda por paciente (en todas las fechas) -->
+          <div class="search">
+            <label class="sr-only" for="buscar-paciente">Buscar paciente por nombre</label>
+            <svg class="search__icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+              <circle cx="11" cy="11" r="6.5" />
+              <path d="m16 16 4 4" />
+            </svg>
+            <input
+              id="buscar-paciente"
+              class="search__input"
+              type="search"
+              autocomplete="off"
+              placeholder="Buscar paciente por nombre"
+              v-model="busqueda"
+              @keydown.esc="limpiarBusqueda"
+            />
+            <button v-if="busqueda" type="button" class="search__clear" aria-label="Borrar búsqueda" @click="limpiarBusqueda">×</button>
+          </div>
+
+          <p class="notice notice--info" v-if="diaEsPasado && !buscando">
+            Estás viendo un día anterior: podés consultar y actualizar estados, pero no agregar turnos en esta fecha.
+          </p>
+
+          <!-- Resultados de búsqueda -->
+          <template v-if="buscando">
+            <p class="list-title" role="status">
+              {{ resultadosBusqueda.length }} {{ resultadosBusqueda.length === 1 ? 'resultado' : 'resultados' }}
+              para “{{ busqueda.trim() }}”<template v-if="filtroEstado !== 'todos'"> · {{ etiquetaEstado(filtroEstado) }}</template>
+            </p>
+            <p class="empty" v-if="resultadosBusqueda.length === 0">No hay turnos con ese nombre.</p>
+            <ul class="agenda" v-else>
+              <li
+                v-for="turno in resultadosBusqueda"
+                :key="turno.id"
+                class="slot"
+                :class="['slot--' + turno.estado, { 'slot--selected': esSeleccionado(turno) }]"
+              >
+                <button type="button" class="slot__main" :aria-label="descripcionTurno(turno, true)" @click="abrirTurno(turno)">
+                  <span class="slot__time">
+                    {{ turno.hora }}
+                    <span class="slot__date">{{ etiquetaDia(turno.fecha) }}</span>
+                  </span>
+                  <span class="slot__who">
+                    <span class="slot__patient">{{ turno.paciente }}</span>
+                    <span class="slot__phone" v-if="turno.telefono">{{ turno.telefono }}</span>
+                  </span>
+                  <span class="slot__status">{{ etiquetaEstado(turno.estado) }}</span>
+                </button>
+                <a
+                  v-if="turno.telefono"
+                  class="slot__call"
+                  :href="enlaceTelefono(turno.telefono)"
+                  :aria-label="'Llamar a ' + turno.paciente + ' al ' + turno.telefono"
+                >
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M5 4h3l2 5-2.5 1.5a11 11 0 0 0 6 6L15 14l5 2v3a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2" />
+                  </svg>
+                </a>
+              </li>
+            </ul>
+          </template>
+
+          <!-- Lista del día -->
+          <template v-else>
+            <div class="empty" v-if="turnosDelDia.length === 0">
+              <p class="empty__text">No hay horarios cargados para este día.</p>
+              <button v-if="!diaEsPasado" type="button" class="btn btn--ghost btn--small" @click="abrirFormularioHorario">
+                + Agregar horario para este día
+              </button>
+            </div>
+            <div class="empty" v-else-if="turnosVisibles.length === 0">
+              <p class="empty__text">No hay turnos {{ etiquetaEstado(filtroEstado).toLowerCase() }}s este día.</p>
+              <button type="button" class="btn btn--ghost btn--small" @click="elegirFiltro('todos')">Ver todos</button>
+            </div>
+
+            <ul class="agenda" v-else>
+              <li
+                v-for="turno in turnosVisibles"
+                :key="turno.id"
+                class="slot"
+                :class="['slot--' + turno.estado, { 'slot--selected': esSeleccionado(turno) }]"
+              >
+                <button type="button" class="slot__main" :aria-label="descripcionTurno(turno, false)" @click="abrirTurno(turno)">
+                  <span class="slot__time">{{ turno.hora }}</span>
+                  <span class="slot__who">
+                    <span class="slot__patient" v-if="turno.paciente">{{ turno.paciente }}</span>
+                    <span class="slot__free" v-else-if="turno.estado === 'disponible' && !diaEsPasado">Libre · tocá para reservar</span>
+                    <span class="slot__phone" v-if="turno.telefono">{{ turno.telefono }}</span>
+                  </span>
+                  <span class="slot__status">{{ etiquetaEstado(turno.estado) }}</span>
+                </button>
+                <a
+                  v-if="turno.telefono"
+                  class="slot__call"
+                  :href="enlaceTelefono(turno.telefono)"
+                  :aria-label="'Llamar a ' + turno.paciente + ' al ' + turno.telefono"
+                >
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M5 4h3l2 5-2.5 1.5a11 11 0 0 0 6 6L15 14l5 2v3a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2" />
+                  </svg>
+                </a>
+              </li>
+            </ul>
+          </template>
+        </section>
+
+        <!-- Próximos días: resumen por día; cada hora abre la misma ventana -->
+        <section class="upcoming" aria-labelledby="proximos-titulo">
+          <h2 class="upcoming__title" id="proximos-titulo">Próximos días</h2>
+
+          <p class="empty" v-if="proximosDias.length === 0">No hay horarios cargados para los próximos días.</p>
+
+          <ul class="upcoming__list" v-else>
+            <li v-for="dia in proximosDias" :key="dia.fecha" class="day" :class="{ 'day--current': dia.fecha === diaSeleccionado }">
+              <div class="day__head">
+                <h3 class="day__title">
+                  {{ etiquetaDia(dia.fecha) }}
+                  <span class="day__tag" v-if="etiquetaRelativa(dia.fecha)">{{ etiquetaRelativa(dia.fecha) }}</span>
+                </h3>
+                <button type="button" class="day__open" @click="irADia(dia.fecha)">
+                  Ver día<span class="sr-only"> {{ etiquetaDia(dia.fecha) }}</span> ›
+                </button>
+              </div>
+
+              <p class="day__counts">
+                <span class="day__total">{{ textoCantidad(dia.cuenta.total) }}</span>
+                <span class="count count--disponible" :class="{ 'count--zero': !dia.cuenta.disponible }">{{ dia.cuenta.disponible }} disp.</span>
+                <span class="count count--reservado" :class="{ 'count--zero': !dia.cuenta.reservado }">{{ dia.cuenta.reservado }} res.</span>
+                <span class="count count--atendido" :class="{ 'count--zero': !dia.cuenta.atendido }">{{ dia.cuenta.atendido }} aten.</span>
+                <span class="count count--cancelado" :class="{ 'count--zero': !dia.cuenta.cancelado }">{{ dia.cuenta.cancelado }} canc.</span>
+              </p>
+
+              <div class="day__chips">
+                <button
+                  v-for="turno in dia.turnos"
+                  :key="turno.id"
+                  type="button"
+                  class="tchip"
+                  :class="['tchip--' + turno.estado, { 'tchip--selected': esSeleccionado(turno) }]"
+                  :aria-label="descripcionTurno(turno, true)"
+                  :title="descripcionTurno(turno, false)"
+                  @click="abrirTurno(turno)"
+                >{{ turno.hora }}</button>
+              </div>
+            </li>
+          </ul>
+        </section>
+
+        <p class="footnote">
+          Los cambios se guardan en este navegador. La web pública se actualiza sola solo si está abierta
+          <strong>en este mismo navegador</strong>: un paciente en otro dispositivo no los ve hasta conectar un
+          servidor (backend, Firebase, Supabase o una API). Las solicitudes por WhatsApp no reservan
+          automáticamente: el turno se marca como Reservado desde este panel.
+        </p>
+      </main>
+
+      <!-- Confirmación breve después de guardar -->
+      <div class="toast" role="status" aria-live="polite">
+        <p class="toast__box" v-if="toast">{{ toast }}</p>
+      </div>
+
+      <!-- Ventana única: agregar horario y editar turno comparten estas mismas clases -->
+      <div v-if="modal" class="sheet-backdrop" @click.self="cerrarModal">
+        <form
+          class="sheet"
+          ref="hoja"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="modal-titulo"
+          tabindex="-1"
+          novalidate
+          @submit.prevent="guardarModal"
+          @keydown.esc="cerrarModal"
+          @keydown.tab="atraparTab($event, 'hoja')"
+        >
+          <div class="sheet__head">
+            <div>
+              <h2 class="sheet__title" id="modal-titulo">{{ tituloModal }}</h2>
+              <p class="sheet__sub" v-if="modal.modo === 'nuevo'">Se crea como horario disponible.</p>
+              <p class="sheet__sub" v-else-if="modal.modo === 'reservar'">Cargá los datos del paciente para reservarlo.</p>
+              <p class="sheet__sub" v-else-if="modal.fecha">
+                {{ fechaCompleta(modal.fecha) }} · <span class="sheet__state" :class="'sheet__state--' + modal.estado">{{ etiquetaEstado(modal.estado) }}</span>
+              </p>
+            </div>
+            <button type="button" class="sheet__close" aria-label="Cerrar" @click="cerrarModal">×</button>
+          </div>
+
+          <!-- Formulario -->
+          <template v-if="!confirmandoEliminar">
+            <!-- Reservar: el horario se muestra fijo; para cambiarlo se pasa a la edición completa -->
+            <div class="slotinfo" v-if="modal.modo === 'reservar'">
+              <p class="slotinfo__time">{{ modal.hora }}</p>
+              <p class="slotinfo__date">{{ fechaCompleta(modal.fecha) }}</p>
+            </div>
+            <p class="field__error field__error--block" v-if="modal.modo === 'reservar' && errores.fecha" role="alert">
+              {{ errores.fecha }}
+            </p>
+
+            <!-- Datos del paciente: al reservar o editar un turno existente (nunca en "Agregar horario") -->
+            <p class="patient-hint" v-if="modal.modo === 'editar' && modal.estado === 'disponible'">
+              Para cargar un paciente, elegí <strong>Reservado</strong>.
+            </p>
+
+            <fieldset class="patient" v-if="mostrarPaciente">
+              <legend class="patient__title">Datos del paciente</legend>
+              <p class="patient__help" v-if="modal.estado === 'reservado'">
+                El nombre es obligatorio para reservar. El teléfono es opcional.
+              </p>
+              <p class="patient__help" v-else>
+                Datos de quien tenía este turno. Se conservan para tu registro.
+              </p>
+
+              <div class="field">
+                <label class="field__label" for="turno-paciente">
+                  Nombre del paciente<span v-if="modal.estado === 'reservado'" class="field__required"> (obligatorio)</span><span v-else class="field__optional"> (opcional)</span>
+                </label>
+                <input
+                  id="turno-paciente"
+                  class="field__input"
+                  :class="{ 'field__input--error': errores.paciente }"
+                  type="text"
+                  autocomplete="off"
+                  autocapitalize="words"
+                  placeholder="Nombre y apellido"
+                  v-model="modal.paciente"
+                  :aria-required="modal.estado === 'reservado' ? 'true' : 'false'"
+                  :aria-invalid="errores.paciente ? 'true' : 'false'"
+                  :aria-describedby="errores.paciente ? 'turno-paciente-error' : null"
+                  @input="limpiarErrores"
+                />
+                <p class="field__error" id="turno-paciente-error" v-if="errores.paciente" role="alert">
+                  {{ errores.paciente }}
+                </p>
+              </div>
+
+              <div class="field">
+                <label class="field__label" for="turno-telefono">
+                  Teléfono del paciente<span class="field__optional"> (opcional)</span>
+                </label>
+                <input
+                  id="turno-telefono"
+                  class="field__input"
+                  type="tel"
+                  inputmode="tel"
+                  autocomplete="off"
+                  placeholder="Ej: 11 5555-0101"
+                  v-model="modal.telefono"
+                />
+              </div>
+            </fieldset>
+
+            <!-- Fecha y hora: botones que abren los selectores propios (sin calendario ni reloj nativos) -->
+            <template v-if="modal.modo !== 'reservar'">
+            <div class="field">
+              <label class="field__label" id="turno-fecha-label" for="turno-fecha">Fecha</label>
+              <button
+                id="turno-fecha"
+                type="button"
+                class="field__input picker-trigger"
+                :class="{ 'field__input--error': errores.fecha, 'picker-trigger--empty': !modal.fecha }"
+                aria-haspopup="dialog"
+                aria-labelledby="turno-fecha-label turno-fecha-valor"
+                :aria-invalid="errores.fecha ? 'true' : 'false'"
+                :aria-describedby="errores.fecha ? 'turno-fecha-error' : null"
+                @click="abrirSelectorFecha"
+              >
+                <span id="turno-fecha-valor">{{ modal.fecha ? fechaCompleta(modal.fecha) : 'Elegir fecha' }}</span>
+                <svg class="picker-trigger__icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect x="3.5" y="5" width="17" height="15" rx="3" />
+                  <path d="M3.5 10h17M8 3v4M16 3v4" />
+                </svg>
+              </button>
+              <p class="field__error" id="turno-fecha-error" v-if="errores.fecha" role="alert">{{ errores.fecha }}</p>
+            </div>
+
+            <div class="field">
+              <label class="field__label" id="turno-hora-label" for="turno-hora">Hora</label>
+              <button
+                id="turno-hora"
+                type="button"
+                class="field__input picker-trigger"
+                :class="{ 'field__input--error': errores.hora, 'picker-trigger--empty': !modal.hora }"
+                aria-haspopup="dialog"
+                aria-labelledby="turno-hora-label turno-hora-valor"
+                :aria-invalid="errores.hora ? 'true' : 'false'"
+                :aria-describedby="errores.hora ? 'turno-hora-error' : null"
+                @click="abrirSelectorHora"
+              >
+                <span id="turno-hora-valor">{{ modal.hora || 'Elegir hora' }}</span>
+                <svg class="picker-trigger__icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <circle cx="12" cy="12" r="8.5" />
+                  <path d="M12 7.5V12l3 2" />
+                </svg>
+              </button>
+              <p class="field__error" id="turno-hora-error" v-if="errores.hora" role="alert">{{ errores.hora }}</p>
+            </div>
+            </template>
+
+            <fieldset class="field estados" v-if="modal.modo === 'editar'">
+              <legend class="field__label">Estado</legend>
+              <div class="estados__grid">
+                <label
+                  v-for="(texto, clave) in estados"
+                  :key="clave"
+                  class="estado"
+                  :class="'estado--' + clave"
+                >
+                  <input
+                    class="estado__radio"
+                    type="radio"
+                    name="turno-estado"
+                    :value="clave"
+                    :checked="modal.estado === clave"
+                    @change="elegirEstado(clave)"
+                  />
+                  <span class="estado__text">{{ texto }}</span>
+                </label>
+              </div>
+            </fieldset>
+
+
+            <div class="sheet__actions">
+              <button type="submit" class="btn btn--primary">
+                {{ { nuevo: 'Guardar', reservar: 'Reservar turno', editar: 'Guardar cambios' }[modal.modo] }}
+              </button>
+              <div class="sheet__row">
+                <button type="button" class="btn btn--ghost" @click="cerrarModal">Cancelar</button>
+                <button
+                  v-if="modal.modo === 'editar'"
+                  type="button"
+                  class="btn btn--danger"
+                  @click="pedirConfirmacionEliminar"
+                >
+                  Eliminar turno
+                </button>
+              </div>
+              <button v-if="modal.modo === 'reservar'" type="button" class="link-btn" @click="pasarAEdicion">
+                Cambiar la hora o eliminar este horario
+              </button>
+            </div>
+          </template>
+
+          <!-- Confirmación de eliminación (misma ventana, mismas clases) -->
+          <div class="sheet__actions" v-else role="alertdialog" aria-describedby="confirmar-texto">
+            <p class="confirm__text" id="confirmar-texto">
+              ¿Eliminar el turno del {{ etiquetaDia(modal.fecha).toLowerCase() }} a las {{ modal.hora }}?
+              <span v-if="modal.paciente">Tiene a {{ modal.paciente }} asignado/a.</span>
+              Esta acción no se puede deshacer.
+            </p>
+            <div class="sheet__row">
+              <button type="button" class="btn btn--ghost" @click="cancelarEliminar">No, volver</button>
+              <button type="button" class="btn btn--danger-solid" @click="eliminar">Sí, eliminar</button>
+            </div>
+          </div>
+        </form>
+      </div>
+
+      <!-- Selectores de fecha y hora: se abren ENCIMA del formulario, con las mismas clases de ventana -->
+      <div v-if="picker" class="sheet-backdrop sheet-backdrop--picker" @click.self="cerrarSelector">
+        <div
+          class="sheet picker"
+          ref="picker"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="picker-titulo"
+          tabindex="-1"
+          @keydown.esc.stop="cerrarSelector"
+          @keydown.tab="atraparTab($event, 'picker')"
+        >
+          <div class="sheet__head">
+            <div>
+              <h2 class="sheet__title" id="picker-titulo">{{ picker.tipo === 'fecha' ? 'Elegir fecha' : 'Elegir hora' }}</h2>
+              <p class="sheet__sub" aria-live="polite">
+                <template v-if="picker.tipo === 'fecha'">{{ picker.valor ? fechaCompleta(picker.valor) : 'Ningún día elegido' }}</template>
+                <template v-else>{{ horaPendiente || 'Ninguna hora elegida' }}</template>
+              </p>
+            </div>
+            <button type="button" class="sheet__close" aria-label="Cerrar" @click="cerrarSelector">×</button>
+          </div>
+
+          <!-- Calendario mensual -->
+          <div v-if="picker.tipo === 'fecha'" class="cal">
+            <div class="cal__nav">
+              <button
+                type="button"
+                class="cal__arrow"
+                aria-label="Mes anterior"
+                :disabled="!calendario.puedeRetroceder"
+                @click="cambiarMes(-1)"
+              >‹</button>
+              <p class="cal__month" aria-live="polite">{{ calendario.titulo }}</p>
+              <button type="button" class="cal__arrow" aria-label="Mes siguiente" @click="cambiarMes(1)">›</button>
+            </div>
+
+            <div class="cal__weekdays" aria-hidden="true">
+              <span v-for="d in ['L', 'M', 'M', 'J', 'V', 'S', 'D']">{{ d }}</span>
+            </div>
+
+            <div class="cal__grid" @keydown="moverConTeclado">
+              <template v-for="(celda, i) in calendario.celdas" :key="celda ? celda.iso : 'vacio-' + i">
+                <span v-if="!celda" class="cal__blank" aria-hidden="true"></span>
+                <button
+                  v-else
+                  type="button"
+                  class="cal__day"
+                  :class="{ 'cal__day--today': celda.hoy, 'cal__day--selected': celda.iso === picker.valor, 'cal__day--has': celda.conTurnos }"
+                  :data-iso="celda.iso"
+                  :disabled="celda.pasado"
+                  :tabindex="celda.iso === calendario.enfocable ? 0 : -1"
+                  :aria-label="fechaCompleta(celda.iso) + (celda.hoy ? ', hoy' : '') + (celda.conTurnos ? ', con turnos' : '')"
+                  :aria-pressed="celda.iso === picker.valor"
+                  :aria-current="celda.hoy ? 'date' : null"
+                  @click="elegirDia(celda.iso)"
+                >{{ celda.dia }}</button>
+              </template>
+            </div>
+          </div>
+
+          <!-- Selector de hora: horas y minutos como botones -->
+          <div v-else class="clock">
+            <div class="clock__preview" aria-hidden="true">
+              <span :class="{ 'clock__part--empty': !picker.h }">{{ picker.h || '--' }}</span>:<span :class="{ 'clock__part--empty': !picker.m }">{{ picker.m || '--' }}</span>
+            </div>
+
+            <fieldset class="clock__group">
+              <legend class="field__label">Hora</legend>
+              <div class="chips chips--hours">
+                <button
+                  v-for="h in opcionesHora"
+                  :key="h"
+                  type="button"
+                  class="chip"
+                  :class="{ 'chip--selected': picker.h === h }"
+                  :aria-pressed="picker.h === h"
+                  :aria-label="h + ' horas'"
+                  @click="elegirHora(h)"
+                >{{ h }}</button>
+              </div>
+            </fieldset>
+
+            <fieldset class="clock__group">
+              <legend class="field__label">Minutos</legend>
+              <div class="chips chips--minutes">
+                <button
+                  v-for="m in opcionesMinuto"
+                  :key="m"
+                  type="button"
+                  class="chip"
+                  :class="{ 'chip--selected': picker.m === m }"
+                  :aria-pressed="picker.m === m"
+                  :aria-label="m + ' minutos'"
+                  @click="elegirMinuto(m)"
+                >:{{ m }}</button>
+              </div>
+            </fieldset>
+
+            <p class="clock__info" v-if="horasOcupadas.length">
+              Ya ocupados ese día: {{ horasOcupadas.join(' · ') }}
+            </p>
+            <p class="field__error" v-if="horaPendienteOcupada" role="alert">
+              Ya hay un turno a las {{ horaPendiente }} ese día.
+            </p>
+          </div>
+
+          <div class="sheet__row picker__actions">
+            <button type="button" class="btn btn--ghost" @click="cerrarSelector">Cancelar</button>
+            <button
+              type="button"
+              class="btn btn--primary"
+              :disabled="picker.tipo === 'fecha' ? !picker.valor : !horaPendiente"
+              @click="confirmarSelector"
+            >Confirmar</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/vue@3.5.13/dist/vue.global.prod.js"></script>
+    <script src="../agenda-store.js"></script>
+    <script src="app.js"></script>
+
+    <!-- Autodiagnóstico: si algo no cargó, lo dice en pantalla -->
+    <script>
+      window.addEventListener('load', function () {
+        var problemas = []
+        var app = document.getElementById('app')
+
+        if (typeof Vue === 'undefined') {
+          problemas.push('No se pudo cargar Vue desde internet (cdn.jsdelivr.net). Revisá la conexión o los bloqueadores de contenido.')
+        } else if (app.hasAttribute('v-cloak')) {
+          problemas.push('No se pudo cargar o ejecutar app.js. Tiene que estar en la misma carpeta que index.html.')
+        }
+        if (typeof AgendaStore === 'undefined') {
+          problemas.push('No se pudo cargar ../agenda-store.js (tiene que estar en la carpeta superior, junto a la web pública).')
+        }
+        if (!getComputedStyle(document.documentElement).getPropertyValue('--primary')) {
+          problemas.push('No se pudo cargar styles.css. Tiene que estar en la misma carpeta que index.html.')
+        }
+
+        if (problemas.length) {
+          var aviso = document.getElementById('aviso-carga')
+          aviso.innerHTML = '<strong>El panel no pudo iniciar:</strong><ul><li>' + problemas.join('</li><li>') + '</li></ul>'
+          aviso.hidden = false
+        }
+      })
+    </script>
+  </body>
+</html>
